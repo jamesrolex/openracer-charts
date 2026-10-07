@@ -35,3 +35,14 @@ product using this data must carry the same attribution.
 
 The extract is reproducible in about 22 seconds from a documented
 command. See `tools/charts/EXTRACT-PMTILES.md` in the main repository.
+
+## Areas cut on request
+
+When a sailor draws a box on the chart in OpenYachtRacer and nobody has
+asked for that water before, the app's relay starts the **Cut a chart
+area** workflow (`.github/workflows/cut.yml`). It cuts the box from the
+newest Protomaps build at max zoom 14, the same recipe as the regions
+above, and publishes it to the
+[`user-cuts`](https://github.com/jamesrolex/openracer-charts/releases/tag/user-cuts)
+release. Boxes are snapped to a 0.1° grid and capped at about 60 nm a
+side, so the same water is only ever cut once.

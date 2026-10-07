@@ -1,0 +1,122 @@
+# Cut one chart area on request (OpenYachtRacer B-1844).
+#
+# The relay starts this job when a sailor draws a box on the chart and
+# nobody has asked for that water before. It runs the same recipe as
+# every shipped region (tools/charts/EXTRACT-PMTILES.md in the main
+# repository): pmtiles extract, max zoom 14, from the newest Protomaps
+# daily build, read by HTTP range requests. The file goes to the
+# `user-cuts` release, where every phone downloads it from.
+#
+# Inputs are checked before use and only ever passed through env, so a
+# crafted box or id cannot run shell code.
+
+name: Cut a chart area
+
+on:
+  workflow_dispatch:
+    inputs:
+      bbox:
+        description: "West,South,East,North in degrees (snapped to 0.1°)"
+        required: true
+      id:
+        description: "Cut id, e.g. cut_w9p50_n38p60_w9p00_n38p90"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cut-${{ inputs.id }}
+  cancel-in-progress: false
+
+jobs:
+  cut:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BBOX: ${{ inputs.bbox }}
+      CUT_ID: ${{ inputs.id }}
+      GH_TOKEN: ${{ github.token }}
+      RELEASE: user-cuts
+    steps:
+      - name: Check the box and the id
+        run: |
+          set -euo pipefail
+          [[ "$CUT_ID" =~ ^cut_[a-z0-9_]{1,80}$ ]] || { echo "Bad id"; exit 1; }
+          num='-?[0-9]{1,3}(\.[0-9]{1,6})?'
+          [[ "$BBOX" =~ ^$num,$num,$num,$num$ ]] || { echo "Bad box"; exit 1; }
+          python3 - <<'PY'
+          import math, os, sys
+          w, s, e, n = (float(x) for x in os.environ["BBOX"].split(","))
+          if not (-180 <= w < e <= 180 and -80 <= s < n <= 80):
+              sys.exit("Box out of range")
+          mid = math.radians((s + n) / 2)
+          lat_nm = (n - s) * 60
+          lon_nm = (e - w) * 60 * math.cos(mid)
+          # 60 nm, plus a little for the 0.1 degree snap.
+          if lat_nm > 66 or lon_nm > 66:
+              sys.exit(f"Box too big: {lat_nm:.0f} x {lon_nm:.0f} nm")
+          print(f"Box {lat_nm:.0f} x {lon_nm:.0f} nm")
+          PY
+
+      - name: Skip if this area is already cut
+        id: existing
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE" --repo "$GITHUB_REPOSITORY" --json assets \
+               --jq '.assets[].name' 2>/dev/null | grep -qx "${CUT_ID}.pmtiles"; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install the pmtiles tool
+        if: steps.existing.outputs.found == 'false'
+        run: |
+          set -euo pipefail
+          gh release download --repo protomaps/go-pmtiles \
+            --pattern '*Linux_x86_64.tar.gz' --dir /tmp/pmtiles
+          tar -xzf /tmp/pmtiles/*.tar.gz -C /tmp/pmtiles
+          sudo install /tmp/pmtiles/pmtiles /usr/local/bin/pmtiles
+          pmtiles version
+
+      - name: Find the newest Protomaps build
+        if: steps.existing.outputs.found == 'false'
+        id: source
+        run: |
+          set -euo pipefail
+          for back in 0 1 2 3 4 5 6 7; do
+            day=$(date -u -d "-${back} day" +%Y%m%d)
+            url="https://build.protomaps.com/${day}.pmtiles"
+            if curl -sfI "$url" > /dev/null; then
+              echo "url=$url" >> "$GITHUB_OUTPUT"
+              echo "Using $url"
+              exit 0
+            fi
+          done
+          echo "No Protomaps build in the last 8 days"; exit 1
+
+      - name: Cut the area
+        if: steps.existing.outputs.found == 'false'
+        env:
+          SOURCE: ${{ steps.source.outputs.url }}
+        run: |
+          set -euo pipefail
+          # --flag=value, never "--flag value": a leading minus in the box
+          # is read as a flag otherwise (EXTRACT-PMTILES.md).
+          pmtiles extract --bbox="$BBOX" --maxzoom=14 "$SOURCE" "${CUT_ID}.pmtiles"
+          pmtiles show "${CUT_ID}.pmtiles"
+          size=$(stat -c %s "${CUT_ID}.pmtiles")
+          echo "Size: $size bytes"
+          [ "$size" -gt 10000 ] || { echo "Cut is empty"; exit 1; }
+
+      - name: Publish it
+        if: steps.existing.outputs.found == 'false'
+        run: |
+          set -euo pipefail
+          if ! gh release view "$RELEASE" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release create "$RELEASE" --repo "$GITHUB_REPOSITORY" \
+              --title "Chart areas cut on request" \
+              --notes "Chart areas cut when a sailor draws a box in OpenYachtRacer. Map data © OpenStreetMap contributors, ODbL. Extracted with Protomaps basemaps."
+          fi
+          gh release upload "$RELEASE" "${CUT_ID}.pmtiles" --repo "$GITHUB_REPOSITORY" --clobber
