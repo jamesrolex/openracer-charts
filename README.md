@@ -46,3 +46,9 @@ above, and publishes it to the
 [`user-cuts`](https://github.com/jamesrolex/openracer-charts/releases/tag/user-cuts)
 release. Boxes are snapped to a 0.1° grid and capped at about 60 nm a
 side, so the same water is only ever cut once.
+
+The same job cuts depth bands for the box from EMODnet Bathymetry, as
+`<id>.depth.json`, and publishes that first. A box with no sea data
+(land only, or outside EMODnet) gets no depth file, and the chart still
+ships. The depth tool in `tools/depth-extract/` is a copy of the one in
+the main repository; copy it again when that one changes.

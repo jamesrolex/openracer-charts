@@ -7,6 +7,14 @@
 # daily build, read by HTTP range requests. The file goes to the
 # `user-cuts` release, where every phone downloads it from.
 #
+# Depth (B-1845): the same job cuts EMODnet depth bands for the box with
+# tools/depth-extract/extract-depth-contours.py, as `<id>.depth.json`.
+# That script is a copy of the one in the main repository, which is
+# private, so this job cannot fetch it. **Copy it again when it changes.**
+# **Depth is published before the chart.** The app asks for depth only
+# once the chart is ready, and reads a 404 as "no depth here", for good.
+# A depth failure never stops the chart: no file simply means no depth.
+#
 # Inputs are checked before use and only ever passed through env, so a
 # crafted box or id cannot run shell code.
 
@@ -70,6 +78,64 @@ jobs:
             echo "found=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Skip depth if it is already cut
+        id: existing_depth
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE" --repo "$GITHUB_REPOSITORY" --json assets \
+               --jq '.assets[].name' 2>/dev/null | grep -qx "${CUT_ID}.depth.json"; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Fetch the depth tool
+        if: steps.existing_depth.outputs.found == 'false'
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools/depth-extract
+
+      - name: Set up Python for depth
+        if: steps.existing_depth.outputs.found == 'false'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cut the depth bands
+        if: steps.existing_depth.outputs.found == 'false'
+        id: depth
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          pip install --quiet numpy contourpy
+          # --flag=value again, for the same leading-minus reason.
+          python tools/depth-extract/extract-depth-contours.py \
+            --bbox="$BBOX" --out="${CUT_ID}.depth.json"
+          if [ -f "${CUT_ID}.depth.json" ]; then
+            echo "Depth: $(stat -c %s "${CUT_ID}.depth.json") bytes"
+          else
+            echo "No depth data for this box (land only, or outside EMODnet)"
+          fi
+
+      - name: Make sure the release exists
+        run: |
+          set -euo pipefail
+          if ! gh release view "$RELEASE" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release create "$RELEASE" --repo "$GITHUB_REPOSITORY" \
+              --title "Chart areas cut on request" \
+              --notes "Chart areas cut when a sailor draws a box in OpenYachtRacer. Map data © OpenStreetMap contributors, ODbL. Extracted with Protomaps basemaps. Depth bands from EMODnet Bathymetry."
+          fi
+
+      - name: Publish the depth
+        if: steps.existing_depth.outputs.found == 'false'
+        run: |
+          set -euo pipefail
+          if [ -f "${CUT_ID}.depth.json" ]; then
+            gh release upload "$RELEASE" "${CUT_ID}.depth.json" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            echo "Nothing to publish"
+          fi
+
       - name: Install the pmtiles tool
         if: steps.existing.outputs.found == 'false'
         run: |
@@ -110,13 +176,8 @@ jobs:
           echo "Size: $size bytes"
           [ "$size" -gt 10000 ] || { echo "Cut is empty"; exit 1; }
 
-      - name: Publish it
+      - name: Publish the chart
         if: steps.existing.outputs.found == 'false'
         run: |
           set -euo pipefail
-          if ! gh release view "$RELEASE" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            gh release create "$RELEASE" --repo "$GITHUB_REPOSITORY" \
-              --title "Chart areas cut on request" \
-              --notes "Chart areas cut when a sailor draws a box in OpenYachtRacer. Map data © OpenStreetMap contributors, ODbL. Extracted with Protomaps basemaps."
-          fi
           gh release upload "$RELEASE" "${CUT_ID}.pmtiles" --repo "$GITHUB_REPOSITORY" --clobber
