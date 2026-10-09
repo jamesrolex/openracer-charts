@@ -3,8 +3,8 @@
 
 **What this makes:** `assets/depth/abersoch-bathymetry.json` — a single
 GeoJSON FeatureCollection with depth contour lines, a shallow-water
-polygon tint and depth-label anchor points, bundled into the app as a
-static asset. At runtime there is NO provider and NO network — the
+polygon tint, the drying-ground tint (B-1857) and depth-label anchor
+points, bundled into the app as a static asset. At runtime there is NO provider and NO network — the
 chart just renders this file. Offline-first by construction.
 
 **Data source:** EMODnet Bathymetry DTM 2024 (open data, CC BY 4.0),
@@ -108,10 +108,20 @@ REGIONS: dict[str, dict] = {
     # 30 m → 1,546,410, 35 m → 1,524,713, **40 m → 1,495,529 — under
     # budget**. Chosen 2026-08-27; the four costed options are in
     # B-1103's register row.
+    #
+    # **B-1857 raised `band_tol_m` again, 40 -> 60 m, to pay for the
+    # drying ground.** The Solent dries more than any other coast here
+    # (Chichester, Langstone, Portsmouth, the Beaulieu and Lymington
+    # flats), and its drying tint costs bytes the 4,471 of headroom at
+    # 40 m could never hold. 60 m is the Saronic's value and frees
+    # about 105 KB of band geometry. `drying_post_tol_m` then spends
+    # fewer points on the drying edge itself; both are measured in
+    # B-1857's register row.
     "solent": {
         "bounds": (50.5, 51.0, -1.75, -0.7),
         "out": "solent-bathymetry.json",
-        "band_tol_m": 40.0,
+        "band_tol_m": 60.0,
+        "drying_post_tol_m": 20.0,
     },
     # Corfu and the Corfu channel south past Paxos, Preveza and
     # Lefkas to Meganisi, Ithaca, Kefalonia and Zakynthos. Matches
@@ -160,6 +170,8 @@ REGIONS: dict[str, dict] = {
     "ionian": {
         "bounds": (37.6, 39.9, 19.5, 21.3),
         "out": "ionian-bathymetry.json",
+        # B-1857: microtidal, so no drying tint. See `DRYING_TINT`.
+        "drying_tint": False,
         "max_depth_m": 5_000.0,
         "post_tol_m": 30.0,
     },
@@ -192,6 +204,8 @@ REGIONS: dict[str, dict] = {
     "saronic": {
         "bounds": (36.85, 38.1, 22.7, 24.15),
         "out": "saronic-bathymetry.json",
+        # B-1857: microtidal, so no drying tint. See `DRYING_TINT`.
+        "drying_tint": False,
         "max_depth_m": 1_500.0,
         "band_tol_m": 60.0,
         "post_tol_m": 35.0,
@@ -228,6 +242,8 @@ REGIONS: dict[str, dict] = {
     "venice-trieste": {
         "bounds": (45.10, 45.82, 12.10, 13.40),
         "out": "venice-trieste-bathymetry.json",
+        # B-1857: microtidal, so no drying tint. See `DRYING_TINT`.
+        "drying_tint": False,
         "max_depth_m": 500.0,
         "shoal_min_ring_area_m2": 2_000.0,
         "post_tol_m": 6.0,
@@ -235,6 +251,8 @@ REGIONS: dict[str, dict] = {
     "istria-kvarner": {
         "bounds": (44.45, 45.82, 13.40, 15.25),
         "out": "istria-kvarner-bathymetry.json",
+        # B-1857: microtidal, so no drying tint. See `DRYING_TINT`.
+        "drying_tint": False,
         "max_depth_m": 500.0,
         "shoal_min_ring_area_m2": 2_000.0,
         "band_tol_m": 60.0,
@@ -243,6 +261,8 @@ REGIONS: dict[str, dict] = {
     "north-dalmatia": {
         "bounds": (43.65, 44.45, 14.60, 16.05),
         "out": "north-dalmatia-bathymetry.json",
+        # B-1857: microtidal, so no drying tint. See `DRYING_TINT`.
+        "drying_tint": False,
         "max_depth_m": 500.0,
         "shoal_min_ring_area_m2": 2_000.0,
         "band_tol_m": 90.0,
@@ -259,6 +279,8 @@ REGIONS: dict[str, dict] = {
     "central-dalmatia": {
         "bounds": (43.00, 43.65, 15.75, 17.35),
         "out": "central-dalmatia-bathymetry.json",
+        # B-1857: microtidal, so no drying tint. See `DRYING_TINT`.
+        "drying_tint": False,
         "max_depth_m": 500.0,
         "shoal_min_ring_area_m2": 2_000.0,
         "band_tol_m": 90.0,
@@ -270,6 +292,8 @@ REGIONS: dict[str, dict] = {
     "south-dalmatia": {
         "bounds": (42.30, 43.00, 16.60, 18.60),
         "out": "south-dalmatia-bathymetry.json",
+        # B-1857: microtidal, so no drying tint. See `DRYING_TINT`.
+        "drying_tint": False,
         # **Measured, not guessed — the box reaches the South Adriatic
         # Pit.** The first run of this region tripped the sanity assert
         # at a 500 m ceiling: the real grid max is 1,151.2 m, off the
@@ -437,6 +461,110 @@ MAX_LABELS_TOTAL = 260
 # against the coast. Negative depth = above water.
 NODATA_DEPTH_M = -5.0
 
+# ── The drying-ground tint (B-1857) ───────────────────────────────
+#
+# Owner, 2026-10-09, over Abersoch: *"why is teh shore white?"*, *"when
+# the middle is deeper and is light ?"*, *"be concistant"*.
+#
+# **The rule: shallower is never lighter than deeper, right up to the
+# high-water line.** The tint ramp starts at the 0 m LAT line. The coast
+# the app draws is the HIGH-water line. Every cell between them is
+# ground that dries, and it painted as bare water - the same colour as
+# 30 m and deeper. At Abersoch the beach dries a long way, so the
+# shallowest ground on the chart read as the deepest.
+#
+# **`kind: "drying"`, a feature of its own - never folded into
+# `shallow`.** The app paints it with the 0-5 m tint, in the same
+# source. But `shallow` MEANS 0-5 m below LAT: `whatsHere` turns a hit
+# into a charted depth of 0 m and the draught check reads that as the
+# floor. A beach that dries 3 m must never answer "0-5 m". Kept apart,
+# every existing feature stays byte-identical and the planner's
+# answers do not move.
+#
+# **No `depthM`, no `fromM`/`toM`.** An app build older than B-1857
+# skips a kind it does not know only when it carries neither, so a
+# user cut made by this script stays safe on a phone not yet updated.
+#
+# **Which cells:** every EMODnet cell above LAT (`depth < 0`), whatever
+# its height. Measured over the 2026-10-09 grid: 708 of Abersoch's
+# above-LAT cells inside the OSM water are a coastal fringe at 5-8.4 m
+# (median 5.18 m) - just over the -5 m no-data convention above - so a
+# "-5 < depth < 0" cut left them white: 38% of the near-shore white
+# filled against 54% (both stopping at the last data cell, as in the
+# table below). Only 17 of the 2,403 above-LAT cells (0.7%) sit under
+# the coastline asset's LAND polygons, none higher than 5.2 m.
+#
+# **Where it stops.** EMODnet's last measured cell often sits short
+# of the OSM high-water line, and the grid alone cannot say by how
+# much (at Abersoch, 849 no-data cells have their centres in the OSM
+# water). Where the coast has a coastline cut, the cut says: a no-data
+# cell within `DRYING_SHORE_REACH_CELLS` of real data whose centre is
+# in the WATER is unmeasured foreshore, and is tinted. At the land
+# edge the tint then runs half a cell further, to the midpoint, and
+# stops. A coast with no cut (the Solent, South Devon, every `--bbox`)
+# gets the half cell from its last data cell.
+#
+# Measured at Abersoch against the OSM coastline. "Left" is water
+# within 1,500 m of the land that no tint covers; 32.30 km2 before.
+# Some of it is deep (30 m and more) and bare on purpose.
+#
+#   stop at                        filled  left      on land  reach p95/max
+#   the last data cell              54%   14.70 km2   0.08%    9 / 24 m
+#   half a cell past it             63%   11.90 km2   0.71%   26 / 57 m
+#   a whole cell past it            78%    7.24 km2   8.75%   84 / 135 m
+#   coastline-aware (shipped)       83%    5.41 km2   2.45%   24 / 57 m
+#
+# The whole cell would be clipped by the land fill on the vector
+# chart, but nothing clips it on the raster basemap, with SAT on, on
+# the replays, or on a coast with no coastline cut. The shipped rule
+# needs no clip: its reach onto land is the half cell, the same bound
+# everywhere. (Drawing the tint below `coastline-land-fill` was ruled
+# out: that cut draws the Venice and Grado lagoons as LAND, under 260
+# km2 of today's 0-5 m tint.) No-data cells that touch WET water keep
+# the far value unless the coastline puts them in the water, so the
+# tint never doubles over the 0-5 m band on a steep shore; the ones it
+# does put in the water keep the contour grid's own -5 m, so their 0 m
+# crossing is the band's own edge.
+#
+# **The contour LINES are never touched.** They, the labels and every
+# `shallow` / `depth-band` polygon come from the untouched grid; the
+# drying tint has its own grid. The self-test proves it: strip the
+# `drying` features and the file is byte-identical to a run with the
+# tint switched off.
+#
+# **Microtidal seas are off (`drying_tint: False`).** In the Greek and
+# Adriatic boxes the above-LAT cells are a coastal fringe at 0.3-0.7 m
+# (median), on a sea with tens of centimetres of tide - not drying
+# ground. At each box's own line settings the tint would add 98-407 KB
+# per box, over the 1.5 MB budget in five of seven, for a change a
+# render of the Dubrovnik coast barely shows. Venice is the closest
+# call (about 1 m of tide, real lagoon flats); it is off with the rest
+# and left to the owner (B-1857). A user's `--bbox` cut
+# keeps the default (on): no budget, and a Brittany box has real tide.
+DRYING_KIND = "drying"
+DRYING_TINT = True
+
+# Post-smoothing density for the drying tint only. Defaults to the
+# region's own `POST_SMOOTH_TOLERANCE_M`; a region's
+# `drying_post_tol_m` raises it (the Solent, for its budget). The
+# shape tolerance is the LINE one, as for `shallow`: the drying edge
+# meets the 0-5 m band along the 0 m line and must stay as tight.
+DRYING_POST_SMOOTH_TOLERANCE_M = 4.0
+
+# Far below every band: no-data cells the drying tint must not reach.
+DRYING_FAR_BELOW_M = 1e6
+
+# How far, in grid cells, the tint may run through no-data cells that
+# the coastline cut puts in the WATER (B-1857). One or two cells is
+# the rim between EMODnet's last measured cell and the OSM high-water
+# line; unbounded, it would flood estuaries and harbours EMODnet never
+# surveyed (Pwllheli, the Glaslyn) and call them drying ground.
+DRYING_SHORE_REACH_CELLS = 2
+
+# The coastline cut for the named region, or None (`--bbox`, and any
+# coast without one). Bound by `configure()` / `configure_bbox()`.
+COASTLINE: Path | None = None
+
 HERE = Path(__file__).resolve().parent
 M_PER_DEG_LAT = 111_132.0
 
@@ -462,6 +590,7 @@ def configure(region: str) -> None:
     global BAND_SIMPLIFY_TOLERANCE_M, LINE_SIMPLIFY_TOLERANCE_M
     global MAX_PLAUSIBLE_DEPTH_M, POST_SMOOTH_TOLERANCE_M
     global SHOAL_MIN_RING_AREA_M2
+    global DRYING_TINT, DRYING_POST_SMOOTH_TOLERANCE_M, COASTLINE
     if region not in REGIONS:
         known = ", ".join(sorted(REGIONS))
         raise SystemExit(f"unknown region {region!r}. Known regions: {known}")
@@ -479,6 +608,11 @@ def configure(region: str) -> None:
     SHOAL_MIN_RING_AREA_M2 = REGIONS[region].get(
         "shoal_min_ring_area_m2", MIN_RING_AREA_M2
     )
+    # B-1857 - the drying tint, on unless a region says otherwise.
+    DRYING_TINT = REGIONS[region].get("drying_tint", True)
+    DRYING_POST_SMOOTH_TOLERANCE_M = REGIONS[region].get(
+        "drying_post_tol_m", POST_SMOOTH_TOLERANCE_M
+    )
     LAT_MIN, LAT_MAX, LON_MIN, LON_MAX = REGIONS[region]["bounds"]
     ERDDAP_URL = (
         "https://erddap.emodnet.eu/erddap/griddap/bathymetry_dtm_2024.csv"
@@ -488,6 +622,9 @@ def configure(region: str) -> None:
         f"dtm2024_{LAT_MIN}_{LAT_MAX}_{LON_MIN}_{LON_MAX}.csv"
     )
     OUT = HERE.parent.parent / "assets" / "depth" / REGIONS[region]["out"]
+    COASTLINE = (
+        HERE.parent.parent / "assets" / "coastline" / f"{region}-coastline.json"
+    )
     # Metres per degree at the box centre — good enough for
     # simplification tolerances; nobody navigates off a
     # Douglas-Peucker epsilon.
@@ -587,12 +724,18 @@ def configure_bbox(
     global BAND_SIMPLIFY_TOLERANCE_M, LINE_SIMPLIFY_TOLERANCE_M
     global MAX_PLAUSIBLE_DEPTH_M, POST_SMOOTH_TOLERANCE_M
     global SHOAL_MIN_RING_AREA_M2, BBOX_MODE
+    global DRYING_TINT, DRYING_POST_SMOOTH_TOLERANCE_M, COASTLINE
     BBOX_MODE = True
+    COASTLINE = None
     REGION = f"bbox {west},{south},{east},{north}"
     BAND_SIMPLIFY_TOLERANCE_M = SIMPLIFY_TOLERANCE_M
     LINE_SIMPLIFY_TOLERANCE_M = SIMPLIFY_TOLERANCE_M
     POST_SMOOTH_TOLERANCE_M = DEFAULT_POST_SMOOTH_TOLERANCE_M
     SHOAL_MIN_RING_AREA_M2 = MIN_RING_AREA_M2
+    # B-1857 - a user's box always gets the drying tint: no budget,
+    # and nobody here knows its tide.
+    DRYING_TINT = True
+    DRYING_POST_SMOOTH_TOLERANCE_M = DEFAULT_POST_SMOOTH_TOLERANCE_M
     MAX_PLAUSIBLE_DEPTH_M = BBOX_MAX_PLAUSIBLE_DEPTH_M
     LAT_MIN, LAT_MAX, LON_MIN, LON_MAX = south, north, west, east
     ERDDAP_URL = (
@@ -794,17 +937,22 @@ def smooth_line(pts: np.ndarray) -> np.ndarray:
 
 
 def smooth_ring(
-    pts: np.ndarray, tol_m: float | None = None
+    pts: np.ndarray,
+    tol_m: float | None = None,
+    post_m: float | None = None,
 ) -> np.ndarray:
     """Same pipeline for a closed polygon ring (not re-closed).
 
     `tol_m` overrides the staircase-kill tolerance — the band-only
-    knob (B-1103). Chaikin and the post-smooth pass stay shared."""
+    knob (B-1103). `post_m` overrides the post-smooth density — the
+    drying-only knob (B-1857). Chaikin stays shared."""
     pts = simplify(
         pts, LINE_SIMPLIFY_TOLERANCE_M if tol_m is None else tol_m
     )
     pts = chaikin(pts, CHAIKIN_ITERATIONS, closed=True)
-    return simplify(pts, POST_SMOOTH_TOLERANCE_M)
+    return simplify(
+        pts, POST_SMOOTH_TOLERANCE_M if post_m is None else post_m
+    )
 
 
 def line_length_m(pts: np.ndarray) -> float:
@@ -888,6 +1036,14 @@ def filled_band(cg, lo: float, hi: float, kind: str) -> list[dict]:
     area_floor = (
         SHOAL_MIN_RING_AREA_M2 if kind == "shallow" else MIN_RING_AREA_M2
     )
+    # **B-1857 — the drying tint is the shoal rung carried up the
+    # beach.** It takes the shoal band's floor and the line tolerance
+    # (set above, since it is not a `depth-band`), plus its own
+    # post-smooth density so a region can pay for it.
+    post_m: float | None = None
+    if kind == DRYING_KIND:
+        area_floor = SHOAL_MIN_RING_AREA_M2
+        post_m = DRYING_POST_SMOOTH_TOLERANCE_M
     points_list, offsets_list = cg.filled(lo, hi)
     for pts_arr, offsets in zip(points_list, offsets_list):
         rings: list[list[list[float]]] = []
@@ -895,7 +1051,7 @@ def filled_band(cg, lo: float, hi: float, kind: str) -> list[dict]:
             ring = np.asarray(pts_arr[a:b])
             if len(ring) < 4:
                 continue
-            ring = smooth_ring(ring, tol_m)
+            ring = smooth_ring(ring, tol_m, post_m)
             if len(ring) < 4:
                 continue
             # First ring is the outer boundary; holes below the area
@@ -910,14 +1066,177 @@ def filled_band(cg, lo: float, hi: float, kind: str) -> list[dict]:
             if len(coords) >= 4:
                 rings.append(coords)
         if rings:
+            # A drying feature carries its kind and nothing else: see
+            # `DRYING_KIND` for why an old app build needs exactly that.
+            props: dict = (
+                {"kind": kind}
+                if kind == DRYING_KIND
+                else {"kind": kind, "fromM": lo, "toM": hi}
+            )
             out.append(
                 {
                     "type": "Feature",
-                    "properties": {"kind": kind, "fromM": lo, "toM": hi},
+                    "properties": props,
                     "geometry": {"type": "Polygon", "coordinates": rings},
                 }
             )
     return out
+
+
+def _neighbour_sum(
+    mask: np.ndarray, values: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per cell: the sum of `values` over its 8 neighbours where `mask`
+    holds, and how many such neighbours there are."""
+    total = np.zeros(values.shape)
+    count = np.zeros(values.shape)
+    h, w = values.shape
+    for di in (-1, 0, 1):
+        for dj in (-1, 0, 1):
+            if di == 0 and dj == 0:
+                continue
+            # Target cell [i, j] reads neighbour [i + di, j + dj].
+            ti = slice(max(-di, 0), h - max(di, 0))
+            si = slice(max(di, 0), h - max(-di, 0))
+            tj = slice(max(-dj, 0), w - max(dj, 0))
+            sj = slice(max(dj, 0), w - max(-dj, 0))
+            hit = mask[si, sj]
+            total[ti, tj] += np.where(hit, values[si, sj], 0.0)
+            count[ti, tj] += hit
+    return total, count
+
+
+def _inside_rings(
+    xs: np.ndarray, ys: np.ndarray, rings: list[np.ndarray]
+) -> np.ndarray:
+    """Even-odd point-in-polygon for many points against many rings
+    (outer rings and holes alike), in numpy. No new dependency."""
+    inside = np.zeros(len(xs), dtype=bool)
+    for ring in rings:
+        x0, y0 = ring[:-1, 0], ring[:-1, 1]
+        x1, y1 = ring[1:, 0], ring[1:, 1]
+        # Edges that cannot reach any point are skipped up front.
+        keep = (np.maximum(y0, y1) >= ys.min()) & (np.minimum(y0, y1) <= ys.max())
+        x0, y0, x1, y1 = x0[keep], y0[keep], x1[keep], y1[keep]
+        if len(x0) == 0:
+            continue
+        step = max(1, 4_000_000 // len(x0))
+        for a in range(0, len(xs), step):
+            px = xs[a : a + step, None]
+            py = ys[a : a + step, None]
+            spans = (y0 > py) != (y1 > py)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                cross = x0 + (py - y0) * (x1 - x0) / (y1 - y0)
+            hits = spans & (px < cross)
+            inside[a : a + step] ^= (hits.sum(axis=1) % 2).astype(bool)
+    return inside
+
+
+def load_water_rings(path: Path | None) -> list[np.ndarray] | None:
+    """The coastline asset's WATER rings (B-1857), or None.
+
+    `assets/coastline/<region>-coastline.json` is the OSM high-water
+    line, cut by `tools/coastline-extract/`. Only named coasts have
+    one; a user's `--bbox` cut never does."""
+    if path is None or not path.exists():
+        return None
+    body = json.loads(path.read_text())
+    rings: list[np.ndarray] = []
+    for feat in body.get("features", []):
+        if feat.get("properties", {}).get("kind") != "water":
+            continue
+        geom = feat["geometry"]
+        polys = (
+            [geom["coordinates"]]
+            if geom["type"] == "Polygon"
+            else geom["coordinates"] if geom["type"] == "MultiPolygon" else []
+        )
+        for poly in polys:
+            rings.extend(np.asarray(r, dtype=float) for r in poly)
+    return rings or None
+
+
+def drying_grid(
+    depth: np.ndarray,
+    lats: np.ndarray | None = None,
+    lons: np.ndarray | None = None,
+    water: list[np.ndarray] | None = None,
+) -> tuple[np.ndarray, float] | None:
+    """The grid the drying tint is traced from, and its floor level.
+
+    **A copy — the contour grid is never touched** (B-1857). Data
+    cells keep their real values, so the tint's seaward edge is the
+    same 0 m crossing the drying line and the 0-5 m band are drawn on.
+    The tint is `floor <= z <= 0`, with `floor` strictly below every
+    data value, so every above-LAT cell is in it whatever its height.
+
+    **Where the coast has a coastline cut (`water`),** a no-data cell
+    within `DRYING_SHORE_REACH_CELLS` of real data whose centre lies in
+    the OSM WATER is foreshore EMODnet never measured: it keeps the
+    contour grid's own `NODATA_DEPTH_M` and so is tinted. Its 0 m
+    crossing against wet water is the very one the 0-5 m band is cut
+    on, so the two meet without a seam of their own.
+
+    Then, at the land edge: a no-data cell next to tinted ground (and
+    to no wet cell) takes `2 * floor - mean(neighbours)`, which puts
+    the boundary half way to it. Every other no-data cell sits far
+    below the floor, so the tint never reaches it. See `DRYING_KIND`.
+
+    None when there is nothing to tint at all."""
+    nodata = depth == NODATA_DEPTH_M
+    data = ~nodata
+    if not data.any():
+        return None
+    wet = data & (depth > 0)
+    tinted = data & (depth < 0)
+    grid = depth.copy()
+    # Strictly below every data value AND the shore cells' -5 m.
+    floor = min(float(np.min(depth[data])), NODATA_DEPTH_M) - 1.0
+    if water is not None and lats is not None and lons is not None:
+        reach = data.copy()
+        for _ in range(DRYING_SHORE_REACH_CELLS):
+            reach |= _neighbour_sum(reach, depth)[1] > 0
+        near = nodata & reach
+        rows, cols = np.nonzero(near)
+        shore = np.zeros_like(nodata)
+        if len(rows):
+            shore[rows, cols] = _inside_rings(
+                np.asarray(lons, dtype=float)[cols],
+                np.asarray(lats, dtype=float)[rows],
+                water,
+            )
+        tinted |= shore
+        # `grid` already holds NODATA_DEPTH_M there: kept, and tinted.
+        nodata = nodata & ~shore
+    if not tinted.any():
+        return None
+    grid[nodata] = floor - DRYING_FAR_BELOW_M
+    t_sum, t_n = _neighbour_sum(tinted, grid)
+    _wet_sum, wet_n = _neighbour_sum(wet, depth)
+    edge = nodata & (t_n > 0) & (wet_n == 0)
+    grid[edge] = 2.0 * floor - t_sum[edge] / t_n[edge]
+    return grid, floor
+
+
+def drying_band(
+    lats: np.ndarray,
+    lons: np.ndarray,
+    depth: np.ndarray,
+    water: list[np.ndarray] | None = None,
+) -> list[dict]:
+    """The drying-ground tint polygons (B-1857), or none."""
+    traced = drying_grid(depth, lats, lons, water)
+    if traced is None:
+        return []
+    grid, floor = traced
+    cg = contour_generator(
+        x=lons,
+        y=lats,
+        z=grid,
+        line_type=LineType.Separate,
+        fill_type=FillType.OuterOffset,
+    )
+    return filled_band(cg, floor, 0.0, DRYING_KIND)
 
 
 # ── Extraction ───────────────────────────────────────────────────
@@ -984,6 +1303,15 @@ def extract(
         features.extend(band)
         band_stats[f"{lo:g}-{hi:g} m"] = len(band)
 
+    # The drying tint (B-1857), from its OWN grid, after every other
+    # tint so the features above keep their bytes and their order.
+    drying = (
+        drying_band(lats, lons, depth, load_water_rings(COASTLINE))
+        if DRYING_TINT
+        else []
+    )
+    features.extend(drying)
+
     labels = labels[:MAX_LABELS_TOTAL]
     fc = {
         "type": "FeatureCollection",
@@ -994,6 +1322,7 @@ def extract(
         "shallow": n_poly,
         "labels": len(labels),
         "bands": band_stats,
+        "drying": len(drying) if DRYING_TINT else None,
     }
 
 
@@ -1007,6 +1336,12 @@ def print_stats(stats: dict[str, object]) -> None:
     print(f"contour lines per level: {stats['lines']}")
     print(f"shallow polygons: {stats['shallow']}, labels: {stats['labels']}")
     print(f"depth-band polygons: {stats['bands']}")
+    drying = stats["drying"]
+    print(
+        "drying polygons: off for this region"
+        if drying is None
+        else f"drying polygons: {drying}"
+    )
     print(
         f"tolerances: lines {LINE_SIMPLIFY_TOLERANCE_M:g} m, "
         f"bands {BAND_SIMPLIFY_TOLERANCE_M:g} m"
@@ -1140,6 +1475,14 @@ def _check_shape(path: Path, box: tuple[float, float, float, float]) -> dict[str
             for ring in geom["coordinates"]:
                 assert ring[0] == ring[-1], "ring not closed"
             pts = [p for ring in geom["coordinates"] for p in ring]
+        elif kind == DRYING_KIND:
+            # B-1857: a polygon carrying its kind and nothing else, so
+            # an older app build skips it rather than misreading it.
+            assert geom["type"] == "Polygon"
+            assert set(props) == {"kind"}, props
+            for ring in geom["coordinates"]:
+                assert ring[0] == ring[-1], "ring not closed"
+            pts = [p for ring in geom["coordinates"] for p in ring]
         elif kind == "label":
             assert geom["type"] == "Point"
             assert props["depthM"] in DEPTH_LEVELS_M
@@ -1149,30 +1492,54 @@ def _check_shape(path: Path, box: tuple[float, float, float, float]) -> dict[str
         for lon, lat in pts:
             assert west - 1e-4 <= lon <= east + 1e-4, lon
             assert south - 1e-4 <= lat <= north + 1e-4, lat
-    assert set(kinds) == {"contour", "shallow", "depth-band", "label"}, kinds
+    assert set(kinds) == {
+        "contour", "shallow", "depth-band", DRYING_KIND, "label"
+    }, kinds
     assert levels == set(DEPTH_LEVELS_M), levels
     assert bands == {SHALLOW_BAND_M, *DEPTH_TINT_BANDS_M}, bands
     return kinds
+
+
+def _inside(lon: float, lat: float, feats: list[dict]) -> bool:
+    """Even-odd point-in-polygon over every ring of `feats`. For the
+    self-test only: no dependency beyond the standard library."""
+    hit = False
+    for feat in feats:
+        for ring in feat["geometry"]["coordinates"]:
+            for (x0, y0), (x1, y1) in zip(ring[:-1], ring[1:]):
+                if (y0 > lat) != (y1 > lat):
+                    if lon < x0 + (lat - y0) * (x1 - x0) / (y1 - y0):
+                        hit = not hit
+    return hit
 
 
 def self_test() -> None:
     """Build contours from a 60 x 60 synthetic seabed and check the
     file is the shape the app parses. **No network.**
 
-    The seabed: dry land along the west edge, shoaling out to 60 m in
-    the east, with a round shoal in the middle that comes up to 1 m.
-    Every contour level, every band and the label anchors appear."""
+    The seabed: dry land along the west edge, then a FORESHORE that
+    dries from 4.5 m above LAT down to the 0 m line (B-1857), shoaling
+    out to 60 m in the east, with a round shoal in the middle that
+    comes up to 1 m. Every contour level, every band, the drying tint
+    and the label anchors appear."""
     south, north, west, east = 50.0, 50.3, -4.0, -3.6
     box = (west, south, east, north)
     n = 60
     lats = [south + (north - south) * i / (n - 1) for i in range(n)]
     lons = [west + (east - west) * j / (n - 1) for j in range(n)]
+    cell = (east - west) / (n - 1)
+    shore_fx = 0.08  # the land / data edge, as a fraction of the box
+    beach_fx = 0.20  # where the foreshore meets the 0 m line
 
     def seabed(lat: float, lon: float) -> float | None:
         fx = (lon - west) / (east - west)  # 0 west .. 1 east
-        if fx < 0.08:
+        if fx < shore_fx:
             return None  # land interior: blank, as ERDDAP sends it
-        depth = -5.0 + 65.0 * fx  # 5 m dry on the shore .. 60 m offshore
+        if fx < beach_fx:
+            # The drying foreshore: 4.5 m above LAT at the top of the
+            # beach, falling to LAT at the drying line.
+            return 4.5 * (beach_fx - fx) / (beach_fx - shore_fx)
+        depth = 60.0 * (fx - beach_fx) / (1.0 - beach_fx)
         # A round shoal at the centre that comes up to 1 m.
         d = math.hypot((lat - 50.15) / 0.05, (lon + 3.8) / 0.07)
         depth -= max(0.0, 1.0 - d) * (depth - 1.0)
@@ -1205,6 +1572,71 @@ def self_test() -> None:
         assert run_bbox(*box, out, cache=grid_csv) is True
         assert not out.with_name(out.name + ".part").exists()
         kinds = _check_shape(out, box)
+
+        # 3b. B-1857 — the shoal tint reaches the data edge. Before the
+        #     fix the foreshore had no tint at all and read as bare
+        #     water, the colour of the deepest sea.
+        body = json.loads(out.read_text())
+        drying = [f for f in body["features"] if f["properties"]["kind"] == DRYING_KIND]
+        first_data = min(x for x in lons if (x - west) / (east - west) >= shore_fx)
+        # The middle rows: Chaikin rounds the polygon's corners where
+        # it meets the box edge, which is the box, not the beach.
+        mid_lats = lats[20:40]
+        for lat in mid_lats:
+            # Up the beach, on the last data column, and mid-foreshore.
+            for lon in (first_data + 0.25 * cell, first_data + 3 * cell):
+                assert _inside(lon, lat, drying), ("not tinted", lon, lat)
+            # Below the drying line it is the 0-5 m band's water, never
+            # the drying tint's.
+            assert not _inside(west + 0.30 * (east - west), lat, drying)
+        reach = min(p[0] for f in drying for r in f["geometry"]["coordinates"] for p in r)
+        # Half a cell past the data, never a whole one (the overspill
+        # bound in `DRYING_KIND`'s header).
+        assert first_data - 0.75 * cell < reach < first_data, (reach, first_data)
+
+        # 3c. The drying tint is an ADDITION. Strip it and the file is
+        #     byte-identical to a run with the tint switched off: the
+        #     0 m line, every contour, label and band stay exactly put.
+        global DRYING_TINT
+        off = tmp / "no_drying.depth.json"
+        lats_a, lons_a, depth_a = fetch_grid()
+        DRYING_TINT = False
+        try:
+            fc_off, _ = extract(lats_a, lons_a, depth_a)
+        finally:
+            DRYING_TINT = True
+        off.write_text(encode(fc_off))
+        stripped = {
+            "type": "FeatureCollection",
+            "features": [
+                f for f in body["features"] if f["properties"]["kind"] != DRYING_KIND
+            ],
+        }
+        assert encode(stripped) == off.read_text(), "drying moved another feature"
+
+        # 3d. Where a coastline cut says a no-data cell is WATER, it is
+        #     unmeasured foreshore and is tinted, up to the reach; a
+        #     no-data cell on LAND, or beyond the reach, never is.
+        #     Columns: 0-4 blank, 5-6 drying, 7+ wet.
+        g_lons = np.arange(10, dtype=float)
+        g_lats = np.arange(5, dtype=float)
+        g = np.full((5, 10), NODATA_DEPTH_M)
+        g[:, 5:7] = -2.0
+        g[:, 7:] = 3.0
+        sea = [np.array([[1.5, -1.0], [20.0, -1.0], [20.0, 9.0], [1.5, 9.0], [1.5, -1.0]])]
+        grid_w, floor_w = drying_grid(g, g_lats, g_lons, sea)
+        tint = (grid_w >= floor_w) & (grid_w <= 0.0)
+        # Cells 3 and 4 are within two cells of data and in the water.
+        assert tint[:, 3:7].all(), grid_w
+        # Cell 2 is in the water but three cells out: past the reach,
+        # so it only takes the half-cell edge value, below the floor.
+        assert not tint[:, 2].any() and (grid_w[:, 2] < floor_w).all()
+        # Cells 0-1 are on land: never reached.
+        assert not tint[:, :2].any()
+        # Without the coastline cut, only the measured ground is tinted.
+        grid_n, floor_n = drying_grid(g)
+        tint_n = (grid_n >= floor_n) & (grid_n <= 0.0)
+        assert tint_n[:, 5:7].all() and not tint_n[:, :5].any()
 
         # 4. Deterministic: the same grid writes the same bytes.
         again = tmp / "again.depth.json"
